@@ -1,0 +1,15 @@
+busid,operator,route,departure
+bus-BK-01,kpn,BK,19:00
+bus-BK-02,freshbus,BK,19:15
+bus-BK-03,flixbus,BK,19:30
+bus-BK-04,kpn,BK,19:45
+bus-BK-05,freshbus,BK,20:00
+bus-BK-06,flixbus,BK,20:15
+bus-BK-07,kpn,BK,20:30
+bus-BK-08,freshbus,BK,20:45
+bus-BK-09,flixbus,BK,21:00
+bus-BK-10,kpn,BK,21:15
+bus-KB-01,freshbus,KB,19:00
+bus-KB-02,flixbus,KB,19:35
+bus-KB-03,kpn,KB,20:10
+bus-KB-04,freshbus,KB,20:45
