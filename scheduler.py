@@ -1,6 +1,6 @@
 import heapq
 from dataclasses import dataclass
-from world import World, Action, Skip, Charge
+from world import World, Bus, Action, Skip, Charge
 
 
 @dataclass
@@ -38,6 +38,12 @@ class EventQueue:
         return bool(self._heap)
 
 
+@dataclass
+class SimState:
+    world: World
+    events: EventQueue
+
+
 class Constraint:
     def validate(self, world: World, action: Action) -> bool:
         return True
@@ -68,3 +74,24 @@ class WaitTimeCost(Cost):
                 return world.config.charge_time_s
             case _:
                 return 0.0
+
+
+class Scheduler:
+    def __init__(self, world: World):
+        self.state = SimState(world, EventQueue())
+        self.seed()
+
+    def seed(self):
+        for bus in self.state.world.buses.values():
+            self.state.events.push(bus.departure_time, BusArrived(bus.route[0], bus.bus_id))
+        for sid, stop in self.state.world.stops.items():
+            for cid in range(len(stop.chargers)):
+                self.state.events.push(0, ChargerFreed(sid, cid))
+
+    def run(self):
+        while self.state.events:
+            event = self.state.events.pop()
+            _ = event
+
+    def results(self) -> dict[str, Bus]:
+        return self.state.world.buses
