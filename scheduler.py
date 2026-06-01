@@ -110,62 +110,55 @@ class Scheduler:
                         if next_sid is None:
                             bus.set_status(now, Finished())
                         else:
-                            dist = world.distance(sid, next_sid)
-                            travel = int(dist / config.speed_kmph * 3600)
-                            bus.set_status(now, Driving(from_stop=sid, to_stop=next_sid, remaining_km=dist))
+                            distance = world.distance(sid, next_sid)
+                            travelDuration = int(distance / config.speed_kmph * 3600)
+                            bus.set_status(now, Driving(from_stop=sid, to_stop=next_sid, remaining_km=distance))
                             bus.route_index = i + 1
-                            bus.km_remaining -= dist
-                            self.state.events.push(now + travel, BusArrived(next_sid, bid))
+                            bus.km_remaining -= distance
+                            self.state.events.push(now + travelDuration, BusArrived(next_sid, bid))
                         continue
 
                     allCases: list[Action] = [Skip(sid, bid)]
-                    free = None
-                    for c in stop.chargers:
-                        match c.status:
+                    vacantCharger = None
+                    for charger in stop.chargers:
+                        match charger.status:
                             case Vacant():
-                                free = c
+                                vacantCharger = charger
                                 break
-                    if free:
-                        allCases.append(Charge(sid, bid, free.id))
+                    if vacantCharger:
+                        allCases.append(Charge(sid, bid, vacantCharger.id))
+                    else:
+                        allCases.append(Waiting(at_stop=sid))
 
                     validCases = []
-                    for a in allCases:
-                        ok = True
-                        for c in self.constraints:
-                            if not c.validate(world, a):
-                                ok = False
+                    for case in allCases:
+                        allConstraintsPassed = True
+                        for constraint in self.constraints:
+                            if not constraint.validate(world, case):
+                                allConstraintsPassed = False
                                 break
-                        if ok:
-                            validCases.append(a)
+                        if allConstraintsPassed:
+                            validCases.append(case)
 
-                    if not validCases:
-                        stop.queue.append(bus)
-                        bus.set_status(now, Waiting(at_stop=sid))
-                    else:
-                        best = validCases[0]
-                        best_score = None
-                        for a in validCases:
-                            s = 0
-                            for c in self.costs:
-                                s += c.calculate(world, a)
-                            if best_score is None or s < best_score:
-                                best_score = s
-                                best = a
-                        match best:
-                            case Skip():
-                                next_sid = world.next_stop(bus.route, i)
-                                dist = world.distance(sid, next_sid)
-                                travel = int(dist / config.speed_kmph * 3600)
-                                bus.set_status(now, Driving(from_stop=sid, to_stop=next_sid, remaining_km=dist))
-                                bus.route_index = i + 1
-                                bus.km_remaining -= dist
-                                self.state.events.push(now + travel, BusArrived(next_sid, bid))
-                            case Charge(stop=sid, bus_id=bid, charger_id=cid):
-                                charger = stop.chargers[cid]
-                                charger.set_status(now, Occupied(bid, now + config.charge_time_s))
-                                bus.set_status(now, Charging(at_stop=sid, charger_id=cid))
-                                bus.km_remaining = config.battery_range_km
-                                self.state.events.push(now + config.charge_time_s, ChargerFreed(sid, cid))
+                    best = validCases[0]
+                    best_score = None
+                    for case in validCases:
+                        pass
+                    match best:
+                        case Skip():
+                            next_sid = world.next_stop(bus.route, i)
+                            distance = world.distance(sid, next_sid)
+                            travelDuration = int(distance / config.speed_kmph * 3600)
+                            bus.set_status(now, Driving(from_stop=sid, to_stop=next_sid, remaining_km=distance))
+                            bus.route_index = i + 1
+                            bus.km_remaining -= distance
+                            self.state.events.push(now + travelDuration, BusArrived(next_sid, bid))
+                        case Charge(stop=sid, bus_id=bid, charger_id=cid):
+                            charger = stop.chargers[cid]
+                            charger.set_status(now, Occupied(bid, now + config.charge_time_s))
+                            bus.set_status(now, Charging(at_stop=sid, charger_id=cid))
+                            bus.km_remaining = config.battery_range_km
+                            self.state.events.push(now + config.charge_time_s, ChargerFreed(sid, cid))
 
                 case ChargerFreed(stop=sid, charger_id=cid):
                     stop = world.stops[sid]
@@ -176,12 +169,12 @@ class Scheduler:
                     if next_sid is None:
                         bus.set_status(now, Finished())
                     else:
-                        dist = world.distance(sid, next_sid)
-                        travel = int(dist / config.speed_kmph * 3600)
-                        bus.set_status(now, Driving(from_stop=sid, to_stop=next_sid, remaining_km=dist))
+                        distance = world.distance(sid, next_sid)
+                        travelDuration = int(distance / config.speed_kmph * 3600)
+                        bus.set_status(now, Driving(from_stop=sid, to_stop=next_sid, remaining_km=distance))
                         bus.route_index += 1
-                        bus.km_remaining -= dist
-                        self.state.events.push(now + travel, BusArrived(next_sid, bid))
+                        bus.km_remaining -= distance
+                        self.state.events.push(now + travelDuration, BusArrived(next_sid, bid))
                     charger.set_status(now, Vacant())
                     if stop.queue:
                         bus = stop.queue.pop(0)
