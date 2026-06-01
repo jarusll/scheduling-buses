@@ -64,7 +64,7 @@ class Cost:
 class WaitTimeCost(Cost):
     def score(self, world: World, action: Action) -> float:
         match action:
-            case Charge(bus_id=b):
+            case Charge():
                 return world.config.charge_time_s
             case _:
                 return 0.0
