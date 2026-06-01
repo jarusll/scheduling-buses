@@ -12,8 +12,6 @@ class Config:
     })
 
 
-CONFIG = Config()
-
 def time_str(seconds: int) -> str:
     h = seconds // 3600
     m = (seconds % 3600) // 60
@@ -95,7 +93,7 @@ class Bus:
     route: str
     departure_time: int
     route_index: int = 0
-    km_remaining: int = field(default_factory=lambda: CONFIG.battery_range_km)
+    km_remaining: int = 0
     status: BusStatus = field(default_factory=NotStarted)
     costs: BusCosts = field(default_factory=BusCosts)
 
@@ -129,7 +127,7 @@ class World:
     connections: dict[tuple[str, str], int]
     buses: dict[str, Bus] = field(default_factory=dict)
     stops: dict[str, BusStop] = field(default_factory=dict)
-    config: Config = field(default_factory=lambda: CONFIG)
+    config: Config = field(default_factory=Config)
 
     def get_stop(self, name: str) -> BusStop:
         return self.stops[name]
@@ -160,7 +158,7 @@ class WorldBuilder:
         self.connections = {}
         self.buses = {}
         self.stops = {}
-        self.config = CONFIG
+        self.config = Config()
 
     def add_route(self, route_id: str, stops: list[str]):
         self.routes[route_id] = stops
@@ -207,6 +205,8 @@ class WorldBuilder:
             raise ValueError(
                 "Missing connections:\n" + "\n".join(f"  {e}" for e in errors)
             )
+        for bus in self.buses.values():
+            bus.km_remaining = self.config.battery_range_km
         return World(
             routes=self.routes,
             connections=self.connections,

@@ -1,4 +1,4 @@
-from world import World, Action, Skip, Charge, CONFIG
+from world import World, Action, Skip, Charge
 
 
 class Constraint:
@@ -28,6 +28,6 @@ class WaitTimeCost(Cost):
     def score(self, world: World, action: Action) -> float:
         match action:
             case Charge(bus_id=b):
-                return CONFIG.charge_time_s
+                return world.config.charge_time_s
             case _:
                 return 0.0
