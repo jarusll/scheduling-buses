@@ -1,4 +1,41 @@
+import heapq
+from dataclasses import dataclass
 from world import World, Action, Skip, Charge
+
+
+@dataclass
+class BusArrived:
+    stop: str
+    bus_id: str
+
+
+@dataclass
+class ChargerFreed:
+    stop: str
+    charger_id: int
+
+
+@dataclass
+class Event:
+    time: int
+    payload: BusArrived | ChargerFreed
+
+    def __lt__(self, other):
+        return self.time < other.time
+
+
+class EventQueue:
+    def __init__(self):
+        self._heap: list[Event] = []
+
+    def push(self, time: int, payload: BusArrived | ChargerFreed):
+        heapq.heappush(self._heap, Event(time, payload))
+
+    def pop(self) -> Event:
+        return heapq.heappop(self._heap)
+
+    def __bool__(self):
+        return bool(self._heap)
 
 
 class Constraint:
