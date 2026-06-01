@@ -1,5 +1,18 @@
 from dataclasses import dataclass, field
 
+@dataclass
+class Config:
+    battery_range_km: int = 240
+    charge_time_s: int = 1500
+    speed_kmph: int = 60
+    weights: dict[str, float] = field(default_factory=lambda: {
+        "individual": 1.0,
+        "operator": 1.0,
+        "overall": 1.0,
+    })
+
+
+CONFIG = Config()
 
 def time_str(seconds: int) -> str:
     h = seconds // 3600
@@ -68,6 +81,8 @@ class Charger:
     status: ChargerState = field(default_factory=Vacant)
 
 
+
+
 @dataclass
 class BusCosts:
     wait_time_s: int = 0
@@ -79,8 +94,26 @@ class Bus:
     operator: str
     route: str
     departure_time: int
+    route_index: int = 0
+    km_remaining: int = field(default_factory=lambda: CONFIG.battery_range_km)
     status: BusStatus = field(default_factory=NotStarted)
     costs: BusCosts = field(default_factory=BusCosts)
+
+
+@dataclass
+class Charge:
+    stop: str
+    bus_id: str
+    charger_id: int
+
+
+@dataclass
+class Skip:
+    stop: str
+    bus_id: str
+
+
+Action = Charge | Skip
 
 
 @dataclass
@@ -91,24 +124,12 @@ class BusStop:
 
 
 @dataclass
-class Config:
-    battery_range_km: int = 240
-    charge_time_s: int = 1500
-    speed_kmph: int = 60
-    weights: dict[str, float] = field(default_factory=lambda: {
-        "individual": 1.0,
-        "operator": 1.0,
-        "overall": 1.0,
-    })
-
-
-@dataclass
 class World:
     routes: dict[str, list[str]]
     connections: dict[tuple[str, str], int]
     buses: dict[str, Bus] = field(default_factory=dict)
     stops: dict[str, BusStop] = field(default_factory=dict)
-    config: Config = field(default_factory=Config)
+    config: Config = field(default_factory=lambda: CONFIG)
 
     def get_stop(self, name: str) -> BusStop:
         return self.stops[name]
@@ -139,7 +160,7 @@ class WorldBuilder:
         self.connections = {}
         self.buses = {}
         self.stops = {}
-        self.config = Config()
+        self.config = CONFIG
 
     def add_route(self, route_id: str, stops: list[str]):
         self.routes[route_id] = stops
