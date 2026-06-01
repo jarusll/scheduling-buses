@@ -42,7 +42,7 @@ class EventQueue:
 class SimState:
     world: World
     events: EventQueue
-    costs: dict[str, dict[str, int]] = field(default_factory=dict)
+    metrics: dict[str, dict[str, int]] = field(default_factory=dict)
 
 
 class Constraint:
@@ -65,23 +65,46 @@ class RangeConstraint(Constraint):
 
 class Cost:
     def calculate(self, world: World, action: Action) -> float:
-        return 0.0
+        raise NotImplementedError
 
 
-class WaitTimeCost(Cost):
-    def calculate(self, world: World, action: Action) -> float:
-        match action:
-            case Charge():
-                return world.config.charge_time_s
-            case _:
-                return 0.0
+class IndividualWaitCost(Cost):
+    def calculate(self, state: SimState) -> float:
+        cost = 0.0
+        for bus in state.world.buses.values():
+            cost += state.metrics[bus.bus_id]["wait"]
+        return cost / len(state.world.buses)
+
+class OperatorWaitCost(Cost):
+    def calculate(self, state: SimState) -> float:
+        operator_waits: dict[str, list[int]] = {}
+
+        for bus in state.world.buses.values():
+            operator_waits.setdefault(bus.operator, []).append(
+                    state.metrics[bus.bus_id]["wait"]
+                )
+
+        total = 0.0
+        for waits in operator_waits.values():
+            total += sum(waits) / len(waits)
+
+        return total / len(operator_waits)
+
+class SystemWaitCost(Cost):
+    def calculate(self, state: SimState) -> float:
+        total = 0.0
+
+        for bus in state.world.buses.values():
+            total += state.metrics[bus.bus_id]["wait"]
+
+        return total
 
 
 class Scheduler:
     def __init__(self, world: World, constraints: list[Constraint], costs: list[Cost]):
         self.state = SimState(world, EventQueue())
         for bid in world.buses:
-            self.state.costs[bid] = {"wait": 0}
+            self.state.metrics[bid] = {"wait": 0}
         self.constraints = constraints
         self.costs = costs
         self.seed()
