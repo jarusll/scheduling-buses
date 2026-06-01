@@ -1,4 +1,5 @@
-from world import WorldBuilder
+from world import WorldBuilder, time_str
+from scheduler import Scheduler, RangeConstraint, WaitTimeCost
 
 world = (WorldBuilder()
     .add_route("BK", ["Bengaluru", "A", "B", "C", "D", "Kochi"])
@@ -18,4 +19,18 @@ world = (WorldBuilder()
     .build()
 )
 
-world.show()
+s = Scheduler(world, [RangeConstraint()], [WaitTimeCost()])
+s.run()
+
+for bus in sorted(s.results().values(), key=lambda b: b.bus_id):
+    print(f"\n{bus.bus_id} ({bus.operator}, {bus.route})")
+    for t, st in bus.logs:
+        print(f"  {time_str(t)}  {type(st).__name__:<15} {st}")
+
+print("\n\nCharger logs:")
+for sid, stop in world.stops.items():
+    for charger in stop.chargers:
+        if charger.logs:
+            print(f"\n  {sid} charger {charger.id}:")
+            for t, st in charger.logs:
+                print(f"    {time_str(t)}  {type(st).__name__:<15} {st}")

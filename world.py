@@ -34,7 +34,7 @@ class Occupied:
     available_at: int
 
 
-ChargerState = Vacant | Occupied
+ChargerStatus = Vacant | Occupied
 
 
 @dataclass
@@ -76,14 +76,14 @@ BusStatus = NotStarted | Waiting | Charging | Driving | OutOfCharge | Finished
 @dataclass
 class Charger:
     id: int
-    status: ChargerState = field(default_factory=Vacant)
+    status: ChargerStatus = field(default_factory=Vacant)
+    logs: list[tuple[int, ChargerStatus]] = field(default_factory=list)
+
+    def set_status(self, time: int, status: ChargerStatus):
+        self.status = status
+        self.logs.append((time, status))
 
 
-
-
-@dataclass
-class BusCosts:
-    wait_time_s: int = 0
 
 
 @dataclass
@@ -95,7 +95,11 @@ class Bus:
     route_index: int = 0
     km_remaining: int = 0
     status: BusStatus = field(default_factory=NotStarted)
-    costs: BusCosts = field(default_factory=BusCosts)
+    logs: list[tuple[int, BusStatus]] = field(default_factory=list)
+
+    def set_status(self, time: int, status: BusStatus):
+        self.status = status
+        self.logs.append((time, status))
 
 
 @dataclass
@@ -170,7 +174,10 @@ class WorldBuilder:
         return self
 
     def add_stop(self, name: str, chargers: int = 1):
-        self.stops[name] = BusStop(name, [Charger(i) for i in range(chargers)])
+        ch = []
+        for i in range(chargers):
+            ch.append(Charger(i))
+        self.stops[name] = BusStop(name, ch)
         return self
 
     def load_csv(self, path: str):
@@ -202,9 +209,10 @@ class WorldBuilder:
     def build(self) -> World:
         errors = self.validate()
         if errors:
-            raise ValueError(
-                "Missing connections:\n" + "\n".join(f"  {e}" for e in errors)
-            )
+            lines = []
+            for e in errors:
+                lines.append(f"  {e}")
+            raise ValueError("Missing connections:\n" + "\n".join(lines))
         for bus in self.buses.values():
             bus.km_remaining = self.config.battery_range_km
         return World(
