@@ -1,6 +1,6 @@
 import heapq
 from dataclasses import dataclass, field
-from world import World, Bus, Action, Skip, Charge, Vacant, Occupied, Charging, Driving, Waiting, Finished
+from world import World, Bus, BusAction, Skip, Wait, Charge, Vacant, Occupied, Charging, Driving, Waiting, Finished
 
 
 @dataclass
@@ -46,12 +46,12 @@ class SimState:
 
 
 class Constraint:
-    def validate(self, world: World, action: Action) -> bool:
+    def validate(self, world: World, action: BusAction) -> bool:
         return True
 
 
 class RangeConstraint(Constraint):
-    def validate(self, world: World, action: Action) -> bool:
+    def validate(self, world: World, action: BusAction) -> bool:
         match action:
             case Skip(stop=s, bus_id=b):
                 bus = world.buses[b]
@@ -64,7 +64,7 @@ class RangeConstraint(Constraint):
 
 
 class Cost:
-    def calculate(self, world: World, action: Action) -> float:
+    def calculate(self, state: SimState) -> float:
         raise NotImplementedError
 
 
@@ -141,7 +141,7 @@ class Scheduler:
                             self.state.events.push(now + travelDuration, BusArrived(next_sid, bid))
                         continue
 
-                    allCases: list[Action] = [Skip(sid, bid)]
+                    allCases: list[BusAction] = [Skip(sid, bid)]
                     vacantCharger = None
                     for charger in stop.chargers:
                         match charger.status:
@@ -151,7 +151,7 @@ class Scheduler:
                     if vacantCharger:
                         allCases.append(Charge(sid, bid, vacantCharger.id))
                     else:
-                        allCases.append(Waiting(at_stop=sid))
+                        allCases.append(Wait(sid, bid))
 
                     validCases = []
                     for case in allCases:
@@ -182,6 +182,9 @@ class Scheduler:
                             bus.set_status(now, Charging(at_stop=sid, charger_id=cid))
                             bus.km_remaining = config.battery_range_km
                             self.state.events.push(now + config.charge_time_s, ChargerFreed(sid, cid))
+                        case Wait(stop=sid, bus_id=bid):
+                            bus.set_status(now, Waiting(at_stop=sid))
+                            stop.queue.append(bus)
 
                 case ChargerFreed(stop=sid, charger_id=cid):
                     stop = world.stops[sid]

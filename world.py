@@ -115,7 +115,13 @@ class Skip:
     bus_id: str
 
 
-Action = Charge | Skip
+@dataclass
+class Wait:
+    stop: str
+    bus_id: str
+
+
+BusAction = Charge | Skip | Wait
 
 
 @dataclass
