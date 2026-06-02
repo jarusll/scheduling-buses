@@ -148,7 +148,7 @@ class Scheduler:
                             case Vacant():
                                 vacantCharger = charger
                                 break
-                    if vacantCharger:
+                    if vacantCharger and not stop.queue:
                         allCases.append(Charge(sid, bid, vacantCharger.id))
                     else:
                         allCases.append(Wait(sid, bid))
