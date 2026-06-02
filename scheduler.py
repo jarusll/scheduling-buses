@@ -391,7 +391,7 @@ class Scheduler:
 
             self.process_next_event(
                 future,
-                remaining_depth,
+                remaining_depth - 1,
             )
 
         return future
