@@ -1,7 +1,7 @@
 import heapq
 from copy import deepcopy
 from dataclasses import dataclass, field
-from world import World, Bus, BusAction, Skip, Wait, Charge, Vacant, Occupied, Charging, Driving, Waiting, Finished
+from src.world import World, Bus, BusAction, Skip, Wait, Charge, Vacant, Occupied, Charging, Driving, Waiting, Finished
 
 def trace_cost(fn):
     def wrapper(self, *args, **kwargs):
