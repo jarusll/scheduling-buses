@@ -42,6 +42,7 @@ class EventQueue:
 class SimState:
     world: World
     events: EventQueue
+    now: int = 0
     metrics: dict[str, dict[str, int]] = field(default_factory=dict)
 
 
@@ -100,6 +101,32 @@ class SystemWaitCost(Cost):
         return total
 
 
+class WaitActionCost(Cost):
+    def calculate(self, state: SimState, action: BusAction) -> float:
+        match action:
+            case Wait(stop=stop_id, bus_id=_):
+                stop = state.world.stops[stop_id]
+                charge_time = state.world.config.charge_time_s
+
+                free_times: list[int] = []
+                for charger in stop.chargers:
+                    match charger.status:
+                        case Occupied(available_at=available_at):
+                            free_times.append(available_at)
+                        case _:
+                            free_times.append(state.now)
+
+                for _ in stop.queue:
+                    next_free = min(free_times)
+                    free_times[free_times.index(next_free)] = next_free + charge_time
+
+                start_time = min(free_times)
+                return max(0, start_time - state.now)
+
+            case _:
+                return 0.0
+
+
 class Scheduler:
     def __init__(self, world: World, constraints: list[Constraint], costs: list[Cost]):
         self.state = SimState(world, EventQueue())
@@ -121,6 +148,7 @@ class Scheduler:
         while self.state.events:
             event = self.state.events.pop()
             now = event.time
+            self.state.now = now
 
             match event.payload:
                 case BusArrived(stop=sid, bus_id=bid):
@@ -163,8 +191,7 @@ class Scheduler:
                         if allConstraintsPassed:
                             validCases.append(case)
 
-                    best = validCases[0]
-                    best_score = None
+                    best = None
                     for case in validCases:
                         pass
                     match best:
@@ -185,6 +212,9 @@ class Scheduler:
                         case Wait(stop=sid, bus_id=bid):
                             bus.set_status(now, Waiting(at_stop=sid))
                             stop.queue.append(bus)
+                        case _:
+                            print(self.state)
+                            raise Exception("No valid action for bus arrived event")
 
                 case ChargerFreed(stop=sid, charger_id=cid):
                     stop = world.stops[sid]
