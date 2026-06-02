@@ -229,103 +229,154 @@ class Scheduler:
             self.state.events.push(bus.departure_time, BusArrived(first_stop, bus.bus_id))
 
     def run(self):
-        world = self.state.world
-        config = world.config
-
         while self.state.events:
             event = self.state.events.pop()
-            now = event.time
-            self.state.now = now
+            self.state.now = event.time
 
             match event.payload:
-                case BusArrived(stop=sid, bus_id=bid):
-                    bus = world.buses[bid]
-                    stop = world.stops[sid]
-                    i = bus.route_index
+                case BusArrived():
+                    self.process_bus_arrived(event)
 
-                    if not stop.chargers:
-                        next_sid = world.next_stop(bus.route, i)
-                        if next_sid is None:
-                            bus.set_status(now, Finished())
-                        else:
-                            distance = world.distance(sid, next_sid)
-                            travelDuration = int(distance / config.speed_kmph * 3600)
-                            bus.set_status(now, Driving(from_stop=sid, to_stop=next_sid, remaining_km=distance))
-                            bus.route_index = i + 1
-                            bus.km_remaining -= distance
-                            self.state.events.push(now + travelDuration, BusArrived(next_sid, bid))
-                        continue
+                case ChargerFreed():
+                    self.process_charger_freed(event)
 
-                    allCases: list[BusAction] = [Skip(sid, bid)]
-                    vacantCharger = None
-                    for charger in stop.chargers:
-                        match charger.status:
-                            case Vacant():
-                                vacantCharger = charger
-                                break
-                    if vacantCharger and not stop.queue:
-                        allCases.append(Charge(sid, bid, vacantCharger.id))
-                    else:
-                        allCases.append(Wait(sid, bid))
+    def process_bus_arrived(self, event: Event):
+        world = self.state.world
 
-                    validCases = []
-                    for case in allCases:
-                        allConstraintsPassed = True
-                        for constraint in self.constraints:
-                            if not constraint.validate(world, case):
-                                allConstraintsPassed = False
-                                break
-                        if allConstraintsPassed:
-                            validCases.append(case)
+        match event.payload:
+            case BusArrived(stop=sid, bus_id=bid):
+                bus = world.buses[bid]
+                stop = world.stops[sid]
+            case _:
+                raise Exception("Expected bus arrived event")
 
-                    best = None
-                    for case in validCases:
-                        pass
-                    match best:
-                        case Skip():
-                            next_sid = world.next_stop(bus.route, i)
-                            distance = world.distance(sid, next_sid)
-                            travelDuration = int(distance / config.speed_kmph * 3600)
-                            bus.set_status(now, Driving(from_stop=sid, to_stop=next_sid, remaining_km=distance))
-                            bus.route_index = i + 1
-                            bus.km_remaining -= distance
-                            self.state.events.push(now + travelDuration, BusArrived(next_sid, bid))
-                        case Charge(stop=sid, bus_id=bid, charger_id=cid):
-                            charger = stop.chargers[cid]
-                            charger.set_status(now, Occupied(bid, now + config.charge_time_s))
-                            bus.set_status(now, Charging(at_stop=sid, charger_id=cid))
-                            bus.km_remaining = config.battery_range_km
-                            self.state.events.push(now + config.charge_time_s, ChargerFreed(sid, cid))
-                        case Wait(stop=sid, bus_id=bid):
-                            bus.set_status(now, Waiting(at_stop=sid))
-                            stop.queue.append(bus)
-                        case _:
-                            print(self.state)
-                            raise Exception("No valid action for bus arrived event")
+        if not stop.chargers:
+            self.depart(bus, sid)
+            return
 
-                case ChargerFreed(stop=sid, charger_id=cid):
-                    stop = world.stops[sid]
-                    charger = stop.chargers[cid]
-                    bid = charger.status.bus_id
-                    bus = world.buses[bid]
-                    next_sid = world.next_stop(bus.route, bus.route_index)
-                    if next_sid is None:
-                        bus.set_status(now, Finished())
-                    else:
-                        distance = world.distance(sid, next_sid)
-                        travelDuration = int(distance / config.speed_kmph * 3600)
-                        bus.set_status(now, Driving(from_stop=sid, to_stop=next_sid, remaining_km=distance))
-                        bus.route_index += 1
-                        bus.km_remaining -= distance
-                        self.state.events.push(now + travelDuration, BusArrived(next_sid, bid))
-                    charger.set_status(now, Vacant())
-                    if stop.queue:
-                        bus = stop.queue.pop(0)
-                        bid = bus.bus_id
-                        bus.set_status(now, Charging(at_stop=sid, charger_id=cid))
-                        bus.km_remaining = config.battery_range_km
-                        charger.set_status(now, Occupied(bid, now + config.charge_time_s))
-                        self.state.events.push(now + config.charge_time_s, ChargerFreed(sid, cid))
+        actions = self.valid_actions(bus, stop)
+        best = self.choose_action(actions)
+        self.apply_action(best)
+
+    def process_charger_freed(self, event: Event):
+        world = self.state.world
+        config = world.config
+        now = self.state.now
+
+        match event.payload:
+            case ChargerFreed(stop=sid, charger_id=cid):
+                stop = world.stops[sid]
+                charger = stop.chargers[cid]
+            case _:
+                raise Exception("Expected charger freed event")
+
+        bid = charger.status.bus_id
+        bus = world.buses[bid]
+        self.depart(bus, sid)
+
+        charger.set_status(now, Vacant())
+        if stop.queue:
+            bus = stop.queue.pop(0)
+            bid = bus.bus_id
+            bus.set_status(now, Charging(at_stop=sid, charger_id=cid))
+            bus.km_remaining = config.battery_range_km
+            charger.set_status(now, Occupied(bid, now + config.charge_time_s))
+            self.state.events.push(now + config.charge_time_s, ChargerFreed(sid, cid))
+
+    def valid_actions(self, bus: Bus, stop) -> list[BusAction]:
+        world = self.state.world
+        candidates: list[BusAction] = [Skip(stop.name, bus.bus_id)]
+
+        vacant_charger = None
+        for charger in stop.chargers:
+            match charger.status:
+                case Vacant():
+                    vacant_charger = charger
+                    break
+
+        if vacant_charger and not stop.queue:
+            candidates.append(Charge(stop.name, bus.bus_id, vacant_charger.id))
+        else:
+            candidates.append(Wait(stop.name, bus.bus_id))
+
+        valid: list[BusAction] = []
+        for action in candidates:
+            all_constraints_passed = True
+            for constraint in self.constraints:
+                if not constraint.validate(world, action):
+                    all_constraints_passed = False
+                    break
+            if all_constraints_passed:
+                valid.append(action)
+
+        return valid
+
+    def score_action(self, action: BusAction) -> float:
+        score = 0.0
+
+        score += WaitTimeCost().calculate(
+            self.state,
+            action,
+        )
+
+        score += ChargingTooEarlyCost().calculate(
+            self.state,
+            action,
+        )
+
+        return score
+
+    def choose_action(self, actions: list[BusAction]) -> BusAction:
+        return min(
+            actions,
+            key=self.score_action,
+        )
+
+    def apply_action(self, action: BusAction):
+        world = self.state.world
+        config = world.config
+        now = self.state.now
+
+        match action:
+            case Skip(stop=sid, bus_id=bid):
+                bus = world.buses[bid]
+                self.depart(bus, sid)
+
+            case Charge(stop=sid, bus_id=bid, charger_id=cid):
+                stop = world.stops[sid]
+                charger = stop.chargers[cid]
+                bus = world.buses[bid]
+                charger.set_status(now, Occupied(bid, now + config.charge_time_s))
+                bus.set_status(now, Charging(at_stop=sid, charger_id=cid))
+                bus.km_remaining = config.battery_range_km
+                self.state.events.push(now + config.charge_time_s, ChargerFreed(sid, cid))
+
+            case Wait(stop=sid, bus_id=bid):
+                stop = world.stops[sid]
+                bus = world.buses[bid]
+                bus.set_status(now, Waiting(at_stop=sid))
+                stop.queue.append(bus)
+
+            case _:
+                print(self.state)
+                raise Exception("No valid action for bus arrived event")
+
+    def depart(self, bus: Bus, stop_id: str):
+        world = self.state.world
+        config = world.config
+        now = self.state.now
+        next_sid = world.next_stop(bus.route, bus.route_index)
+
+        if next_sid is None:
+            bus.set_status(now, Finished())
+            return
+
+        distance = world.distance(stop_id, next_sid)
+        travel_duration = int(distance / config.speed_kmph * 3600)
+        bus.set_status(now, Driving(from_stop=stop_id, to_stop=next_sid, remaining_km=distance))
+        bus.route_index += 1
+        bus.km_remaining -= distance
+        self.state.events.push(now + travel_duration, BusArrived(next_sid, bus.bus_id))
 
     def results(self) -> dict[str, Bus]:
         return self.state.world.buses
