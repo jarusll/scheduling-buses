@@ -1,16 +1,5 @@
 from dataclasses import dataclass, field
 
-@dataclass
-class Config:
-    battery_range_km: int = 240
-    charge_time_s: int = 1500
-    speed_kmph: int = 60
-    weights: dict[str, float] = field(default_factory=lambda: {
-        "individual": 1.0,
-        "operator": 1.0,
-        "overall": 1.0,
-    })
-
 
 def time_str(seconds: int) -> str:
     h = seconds // 3600
@@ -137,7 +126,7 @@ class World:
     connections: dict[tuple[str, str], int]
     buses: dict[str, Bus] = field(default_factory=dict)
     stops: dict[str, BusStop] = field(default_factory=dict)
-    config: Config = field(default_factory=Config)
+    config: object = None
 
     def get_stop(self, name: str) -> BusStop:
         return self.stops[name]
@@ -168,7 +157,11 @@ class WorldBuilder:
         self.connections = {}
         self.buses = {}
         self.stops = {}
-        self.config = Config()
+        self.config = None
+
+    def set_config(self, config):
+        self.config = config
+        return self
 
     def add_route(self, route_id: str, stops: list[str]):
         self.routes[route_id] = stops
