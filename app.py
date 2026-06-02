@@ -1,7 +1,6 @@
 import streamlit as st
 import pandas as pd
-import tempfile
-import os
+import glob
 from dataclasses import dataclass, field
 
 from src.world import WorldBuilder, time_str, Occupied, Vacant
@@ -126,20 +125,15 @@ with st.sidebar:
     ws = st.number_input("System weight", value=1.0)
 config = Config(battery_range, charge_time, speed, {"individual": wi, "operator": wo, "overall": ws})
 
-uploaded = st.file_uploader("Choose a CSV scenario file", type="csv")
-if uploaded is None:
-    st.info("Upload a CSV file to run the scheduler.")
-    st.stop()
+scenario_files = sorted(glob.glob("Scenarios/*.csv"))
+scenario_names = [f.split("/")[-1].replace(".csv", "") for f in scenario_files]
+selected_scenario = st.selectbox("Select scenario", scenario_names)
 
-df = pd.read_csv(uploaded)
-
-with tempfile.NamedTemporaryFile(suffix=".csv", delete=False) as f:
-    f.write(uploaded.getbuffer())
-    csv_path = f.name
+csv_path = f"Scenarios/{selected_scenario}.csv"
+df = pd.read_csv(csv_path)
 
 with st.spinner("Running scheduler..."):
     world, s = build_and_run(csv_path, config)
-os.unlink(csv_path)
 
 tab1, tab2, tab3 = st.tabs(["Input", "Bus Schedule", "Charger"])
 with tab1:
