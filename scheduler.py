@@ -64,19 +64,37 @@ class RangeConstraint(Constraint):
                 return True
 
 
-class Cost:
+class StateCost:
     def calculate(self, state: SimState) -> float:
         raise NotImplementedError
 
 
-class IndividualWaitCost(Cost):
+class WeightedCost(StateCost):
+    def __init__(self, weight: float, cost: StateCost):
+        self.weight = weight
+        self.cost = cost
+
+    def calculate(self, state: SimState) -> float:
+        return self.weight * self.cost.calculate(state)
+
+
+class ComposedCost(StateCost):
+    def __init__(self, costs: list[StateCost]):
+        self.costs = costs
+
+    def calculate(self, state: SimState) -> float:
+        return sum(cost.calculate(state) for cost in self.costs)
+
+
+class IndividualWaitCost(StateCost):
     def calculate(self, state: SimState) -> float:
         cost = 0.0
         for bus in state.world.buses.values():
             cost += state.metrics[bus.bus_id]["wait"]
         return cost / len(state.world.buses)
 
-class OperatorWaitCost(Cost):
+
+class OperatorWaitCost(StateCost):
     def calculate(self, state: SimState) -> float:
         operator_waits: dict[str, list[int]] = {}
 
@@ -91,7 +109,7 @@ class OperatorWaitCost(Cost):
 
         return total / len(operator_waits)
 
-class SystemWaitCost(Cost):
+class SystemWaitCost(StateCost):
     def calculate(self, state: SimState) -> float:
         total = 0.0
 
@@ -101,7 +119,34 @@ class SystemWaitCost(Cost):
         return total
 
 
-class WaitActionCost(Cost):
+IndividualCost = IndividualWaitCost
+OperatorCost = OperatorWaitCost
+SystemCost = SystemWaitCost
+
+
+class ActionCost:
+    def calculate(self, state: SimState, action: BusAction) -> float:
+        raise NotImplementedError
+
+
+class WeightedActionCost(ActionCost):
+    def __init__(self, weight: float, cost: ActionCost):
+        self.weight = weight
+        self.cost = cost
+
+    def calculate(self, state: SimState, action: BusAction) -> float:
+        return self.weight * self.cost.calculate(state, action)
+
+
+class ComposedActionCost(ActionCost):
+    def __init__(self, costs: list[ActionCost]):
+        self.costs = costs
+
+    def calculate(self, state: SimState, action: BusAction) -> float:
+        return sum(cost.calculate(state, action) for cost in self.costs)
+
+
+class WaitTimeCost(ActionCost):
     def calculate(self, state: SimState, action: BusAction) -> float:
         match action:
             case Wait(stop=stop_id, bus_id=_):
@@ -127,8 +172,50 @@ class WaitActionCost(Cost):
                 return 0.0
 
 
+WaitActionCost = WaitTimeCost
+
+
+class ChargingTooEarlyCost(ActionCost):
+    def __init__(
+        self,
+        high_penalty: float = 5.0,
+        medium_penalty: float = 3.0,
+        low_penalty: float = 1.0,
+        high_threshold: float = 0.75,
+        medium_threshold: float = 0.50,
+        low_threshold: float = 0.25,
+    ):
+        self.high_penalty = high_penalty
+        self.medium_penalty = medium_penalty
+        self.low_penalty = low_penalty
+        self.high_threshold = high_threshold
+        self.medium_threshold = medium_threshold
+        self.low_threshold = low_threshold
+
+    def calculate(self, state: SimState, action: BusAction) -> float:
+        match action:
+            case Charge(bus_id=bus_id):
+                bus = state.world.buses[bus_id]
+                max_range = state.world.config.battery_range_km
+                if max_range <= 0:
+                    return 0.0
+
+                pct_remaining = bus.km_remaining / max_range
+
+                if pct_remaining >= self.high_threshold:
+                    return self.high_penalty
+                if pct_remaining >= self.medium_threshold:
+                    return self.medium_penalty
+                if pct_remaining >= self.low_threshold:
+                    return self.low_penalty
+                return 0.0
+
+            case _:
+                return 0.0
+
+
 class Scheduler:
-    def __init__(self, world: World, constraints: list[Constraint], costs: list[Cost]):
+    def __init__(self, world: World, constraints: list[Constraint], costs: list[StateCost]):
         self.state = SimState(world, EventQueue())
         for bid in world.buses:
             self.state.metrics[bid] = {"wait": 0}
