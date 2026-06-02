@@ -1,5 +1,21 @@
 from world import WorldBuilder, time_str
-from scheduler import Scheduler, RangeConstraint, WaitTimeCost
+from scheduler import (
+    ComposedDispatchCost,
+    IndividualDispatchCost,
+    OperatorDispatchCost,
+    Scheduler,
+    RangeConstraint,
+    SystemDispatchCost,
+    WaitTimeCost,
+    ChargingTooEarlyCost,
+    ComposedActionCost,
+    ComposedCost,
+    WeightedCost,
+    IndividualCost,
+    OperatorCost,
+    SystemCost,
+    WeightedDispatchCost,
+)
 
 world = (WorldBuilder()
     .add_route("BK", ["Bengaluru", "A", "B", "C", "D", "Kochi"])
@@ -19,7 +35,44 @@ world = (WorldBuilder()
     .build()
 )
 
-s = Scheduler(world, [RangeConstraint()], [WaitTimeCost()])
+w = world.config.weights
+StateCost = ComposedCost([
+    WeightedCost(
+        w["individual"],
+        IndividualCost(),
+    ),
+    WeightedCost(
+        w["operator"],
+        OperatorCost(),
+    ),
+    WeightedCost(
+        w["overall"],
+        SystemCost(),
+    ),
+])
+
+BusDispatchCost = ComposedDispatchCost([
+            WeightedDispatchCost(
+                w["individual"],
+                IndividualDispatchCost(),
+            ),
+            WeightedDispatchCost(
+                w["operator"],
+                OperatorDispatchCost(),
+            ),
+            WeightedDispatchCost(
+                w["overall"],
+                SystemDispatchCost(),
+            ),
+        ])
+
+s = Scheduler(
+    world,
+    [RangeConstraint()],
+    ComposedActionCost([WaitTimeCost(), ChargingTooEarlyCost()]),
+    StateCost,
+    BusDispatchCost
+)
 s.run()
 
 for bus in sorted(s.results().values(), key=lambda b: b.bus_id):

@@ -3,6 +3,13 @@ from copy import deepcopy
 from dataclasses import dataclass, field
 from world import World, Bus, BusAction, Skip, Wait, Charge, Vacant, Occupied, Charging, Driving, Waiting, Finished
 
+def trace_cost(fn):
+    def wrapper(self, *args, **kwargs):
+        result = fn(self, *args, **kwargs)
+        # print(f"{self.__class__.__name__}: " f"{result}")
+        return result
+    return wrapper
+
 
 @dataclass
 class BusArrived:
@@ -88,6 +95,7 @@ class ComposedCost(StateCost):
 
 
 class IndividualWaitCost(StateCost):
+    @trace_cost
     def calculate(self, state: SimState) -> float:
         cost = 0.0
         for bus in state.world.buses.values():
@@ -96,6 +104,7 @@ class IndividualWaitCost(StateCost):
 
 
 class OperatorWaitCost(StateCost):
+    @trace_cost
     def calculate(self, state: SimState) -> float:
         operator_waits: dict[str, list[int]] = {}
 
@@ -111,6 +120,7 @@ class OperatorWaitCost(StateCost):
         return total / len(operator_waits)
 
 class SystemWaitCost(StateCost):
+    @trace_cost
     def calculate(self, state: SimState) -> float:
         total = 0.0
 
@@ -148,6 +158,7 @@ class ComposedActionCost(ActionCost):
 
 
 class WaitTimeCost(ActionCost):
+    @trace_cost
     def calculate(self, state: SimState, action: BusAction) -> float:
         match action:
             case Wait(stop=stop_id, bus_id=_):
@@ -179,9 +190,9 @@ WaitActionCost = WaitTimeCost
 class ChargingTooEarlyCost(ActionCost):
     def __init__(
         self,
-        high_penalty: float = 5.0,
-        medium_penalty: float = 3.0,
-        low_penalty: float = 1.0,
+        high_penalty: float = 1000,
+        medium_penalty: float = 500,
+        low_penalty: float = 100,
         high_threshold: float = 0.75,
         medium_threshold: float = 0.50,
         low_threshold: float = 0.25,
@@ -193,6 +204,7 @@ class ChargingTooEarlyCost(ActionCost):
         self.medium_threshold = medium_threshold
         self.low_threshold = low_threshold
 
+    @trace_cost
     def calculate(self, state: SimState, action: BusAction) -> float:
         match action:
             case Charge(bus_id=bus_id):
@@ -214,6 +226,93 @@ class ChargingTooEarlyCost(ActionCost):
             case _:
                 return 0.0
 
+class DispatchCost:
+    def calculate(
+        self,
+        state: SimState,
+        bus: Bus,
+    ) -> float:
+        raise NotImplementedError
+
+
+class WeightedDispatchCost(DispatchCost):
+    def __init__(
+        self,
+        weight: float,
+        cost: DispatchCost,
+    ):
+        self.weight = weight
+        self.cost = cost
+
+    def calculate(
+        self,
+        state: SimState,
+        bus: Bus,
+    ) -> float:
+        return self.weight * self.cost.calculate(
+            state,
+            bus,
+        )
+
+
+class ComposedDispatchCost(DispatchCost):
+    def __init__(
+        self,
+        costs: list[DispatchCost],
+    ):
+        self.costs = costs
+
+    def calculate(
+        self,
+        state: SimState,
+        bus: Bus,
+    ) -> float:
+        return sum(
+            cost.calculate(
+                state,
+                bus,
+            )
+            for cost in self.costs
+        )
+
+
+class IndividualDispatchCost(DispatchCost):
+    @trace_cost
+    def calculate(
+        self,
+        state: SimState,
+        bus: Bus,
+    ) -> float:
+        return state.metrics[bus.bus_id]["wait"]
+
+
+class OperatorDispatchCost(DispatchCost):
+    @trace_cost
+    def calculate(
+        self,
+        state: SimState,
+        bus: Bus,
+    ) -> float:
+        waits = [
+            state.metrics[b.bus_id]["wait"]
+            for b in state.world.buses.values()
+            if b.operator == bus.operator
+        ]
+
+        return sum(waits) / len(waits)
+
+
+class SystemDispatchCost(DispatchCost):
+    @trace_cost
+    def calculate(
+        self,
+        state: SimState,
+        bus: Bus,
+    ) -> float:
+        return (
+            state.world.config.battery_range_km
+            - bus.km_remaining
+        )
 
 class Scheduler:
     def __init__(
@@ -222,6 +321,7 @@ class Scheduler:
         constraints: list[Constraint],
         action_cost: ActionCost,
         state_cost: StateCost,
+        dispatch_cost: DispatchCost,
         lookahead_depth=3,
     ):
         self.state = SimState(world, EventQueue())
@@ -231,6 +331,7 @@ class Scheduler:
         self.action_cost = action_cost
         self.state_cost = state_cost
         self.lookahead_depth = lookahead_depth
+        self.dispatch_cost = dispatch_cost
         self.seed()
 
     def seed(self):
@@ -327,6 +428,7 @@ class Scheduler:
 
         bid = charger.status.bus_id
         bus = world.buses[bid]
+
         self.depart(
             state,
             bus,
@@ -334,13 +436,40 @@ class Scheduler:
         )
 
         charger.set_status(now, Vacant())
+
         if stop.queue:
-            bus = stop.queue.pop(0)
+            bus = max(
+                stop.queue,
+                key=lambda b: self.dispatch_cost.calculate(
+                    state,
+                    b,
+                ),
+            )
+
+            stop.queue.remove(bus)
             bid = bus.bus_id
-            bus.set_status(now, Charging(at_stop=sid, charger_id=cid))
+            bus.set_status(
+                now,
+                Charging(
+                    at_stop=sid,
+                    charger_id=cid,
+                ),
+            )
             bus.km_remaining = config.battery_range_km
-            charger.set_status(now, Occupied(bid, now + config.charge_time_s))
-            state.events.push(now + config.charge_time_s, ChargerFreed(sid, cid))
+            charger.set_status(
+                now,
+                Occupied(
+                    bid,
+                    now + config.charge_time_s,
+                ),
+            )
+            state.events.push(
+                now + config.charge_time_s,
+                ChargerFreed(
+                    sid,
+                    cid,
+                ),
+            )
 
     def valid_actions(self, state: SimState, bus: Bus, stop) -> list[BusAction]:
         world = state.world
@@ -432,7 +561,6 @@ class Scheduler:
                     future,
                 )
             )
-
             score = left + right
 
             if score < best_score:
