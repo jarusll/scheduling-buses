@@ -1,4 +1,5 @@
 import heapq
+from copy import deepcopy
 from dataclasses import dataclass, field
 from world import World, Bus, BusAction, Skip, Wait, Charge, Vacant, Occupied, Charging, Driving, Waiting, Finished
 
@@ -215,12 +216,21 @@ class ChargingTooEarlyCost(ActionCost):
 
 
 class Scheduler:
-    def __init__(self, world: World, constraints: list[Constraint], costs: list[StateCost]):
+    def __init__(
+        self,
+        world: World,
+        constraints: list[Constraint],
+        action_cost: ActionCost,
+        state_cost: StateCost,
+        lookahead_depth=3,
+    ):
         self.state = SimState(world, EventQueue())
         for bid in world.buses:
             self.state.metrics[bid] = {"wait": 0}
         self.constraints = constraints
-        self.costs = costs
+        self.action_cost = action_cost
+        self.state_cost = state_cost
+        self.lookahead_depth = lookahead_depth
         self.seed()
 
     def seed(self):
@@ -230,18 +240,47 @@ class Scheduler:
 
     def run(self):
         while self.state.events:
-            event = self.state.events.pop()
-            self.state.now = event.time
+            self.process_next_event(
+                self.state,
+                self.lookahead_depth,
+            )
 
-            match event.payload:
-                case BusArrived():
-                    self.process_bus_arrived(event)
+    def clone_state(
+        self,
+        state: SimState,
+    ) -> SimState:
+        return deepcopy(state)
 
-                case ChargerFreed():
-                    self.process_charger_freed(event)
+    def process_next_event(
+        self,
+        state: SimState,
+        remaining_depth: int,
+    ):
+        event = state.events.pop()
+        state.now = event.time
 
-    def process_bus_arrived(self, event: Event):
-        world = self.state.world
+        match event.payload:
+            case BusArrived():
+                self.process_bus_arrived(
+                    state,
+                    event,
+                    remaining_depth,
+                )
+
+            case ChargerFreed():
+                self.process_charger_freed(
+                    state,
+                    event,
+                    remaining_depth,
+                )
+
+    def process_bus_arrived(
+        self,
+        state: SimState,
+        event: Event,
+        remaining_depth: int,
+    ):
+        world = state.world
 
         match event.payload:
             case BusArrived(stop=sid, bus_id=bid):
@@ -251,17 +290,33 @@ class Scheduler:
                 raise Exception("Expected bus arrived event")
 
         if not stop.chargers:
-            self.depart(bus, sid)
+            self.depart(
+                state,
+                bus,
+                sid,
+            )
             return
 
-        actions = self.valid_actions(bus, stop)
-        best = self.choose_action(actions)
-        self.apply_action(best)
+        actions = self.valid_actions(state, bus, stop)
+        best = self.choose_action(
+            state,
+            actions,
+            remaining_depth,
+        )
+        self.apply_action(
+            state,
+            best,
+        )
 
-    def process_charger_freed(self, event: Event):
-        world = self.state.world
+    def process_charger_freed(
+        self,
+        state: SimState,
+        event: Event,
+        remaining_depth: int,
+    ):
+        world = state.world
         config = world.config
-        now = self.state.now
+        now = state.now
 
         match event.payload:
             case ChargerFreed(stop=sid, charger_id=cid):
@@ -272,7 +327,11 @@ class Scheduler:
 
         bid = charger.status.bus_id
         bus = world.buses[bid]
-        self.depart(bus, sid)
+        self.depart(
+            state,
+            bus,
+            sid,
+        )
 
         charger.set_status(now, Vacant())
         if stop.queue:
@@ -281,10 +340,10 @@ class Scheduler:
             bus.set_status(now, Charging(at_stop=sid, charger_id=cid))
             bus.km_remaining = config.battery_range_km
             charger.set_status(now, Occupied(bid, now + config.charge_time_s))
-            self.state.events.push(now + config.charge_time_s, ChargerFreed(sid, cid))
+            state.events.push(now + config.charge_time_s, ChargerFreed(sid, cid))
 
-    def valid_actions(self, bus: Bus, stop) -> list[BusAction]:
-        world = self.state.world
+    def valid_actions(self, state: SimState, bus: Bus, stop) -> list[BusAction]:
+        world = state.world
         candidates: list[BusAction] = [Skip(stop.name, bus.bus_id)]
 
         vacant_charger = None
@@ -311,36 +370,90 @@ class Scheduler:
 
         return valid
 
-    def score_action(self, action: BusAction) -> float:
-        score = 0.0
+    def lookahead(
+        self,
+        state: SimState,
+        action: BusAction,
+        remaining_depth: int,
+    ) -> SimState:
+        future = self.clone_state(
+            state
+        )
 
-        score += WaitTimeCost().calculate(
-            self.state,
+        self.apply_action(
+            future,
             action,
         )
 
-        score += ChargingTooEarlyCost().calculate(
-            self.state,
-            action,
-        )
+        for _ in range(remaining_depth):
+            if not future.events:
+                break
 
-        return score
+            self.process_next_event(
+                future,
+                remaining_depth,
+            )
 
-    def choose_action(self, actions: list[BusAction]) -> BusAction:
-        return min(
-            actions,
-            key=self.score_action,
-        )
+        return future
 
-    def apply_action(self, action: BusAction):
-        world = self.state.world
+    def choose_action(
+        self,
+        state: SimState,
+        actions: list[BusAction],
+        remaining_depth: int,
+    ) -> BusAction:
+        if remaining_depth <= 0:
+            return min(
+                actions,
+                key=lambda action: self.action_cost.calculate(state, action),
+            )
+
+        best = None
+        best_score = float("inf")
+
+        for action in actions:
+            left = (
+                self.action_cost
+                .calculate(
+                    state,
+                    action,
+                )
+            )
+
+            future = self.lookahead(
+                state,
+                action,
+                remaining_depth - 1,
+            )
+
+            right = (
+                self.state_cost
+                .calculate(
+                    future,
+                )
+            )
+
+            score = left + right
+
+            if score < best_score:
+                best_score = score
+                best = action
+
+        return best
+
+    def apply_action(self, state: SimState, action: BusAction):
+        world = state.world
         config = world.config
-        now = self.state.now
+        now = state.now
 
         match action:
             case Skip(stop=sid, bus_id=bid):
                 bus = world.buses[bid]
-                self.depart(bus, sid)
+                self.depart(
+                    state,
+                    bus,
+                    sid,
+                )
 
             case Charge(stop=sid, bus_id=bid, charger_id=cid):
                 stop = world.stops[sid]
@@ -349,22 +462,27 @@ class Scheduler:
                 charger.set_status(now, Occupied(bid, now + config.charge_time_s))
                 bus.set_status(now, Charging(at_stop=sid, charger_id=cid))
                 bus.km_remaining = config.battery_range_km
-                self.state.events.push(now + config.charge_time_s, ChargerFreed(sid, cid))
+                state.events.push(now + config.charge_time_s, ChargerFreed(sid, cid))
 
             case Wait(stop=sid, bus_id=bid):
                 stop = world.stops[sid]
                 bus = world.buses[bid]
                 bus.set_status(now, Waiting(at_stop=sid))
+                wait = WaitTimeCost().calculate(
+                    state,
+                    action,
+                )
+                state.metrics[bid]["wait"] += int(wait)
                 stop.queue.append(bus)
 
             case _:
-                print(self.state)
+                print(state)
                 raise Exception("No valid action for bus arrived event")
 
-    def depart(self, bus: Bus, stop_id: str):
-        world = self.state.world
+    def depart(self, state: SimState, bus: Bus, stop_id: str):
+        world = state.world
         config = world.config
-        now = self.state.now
+        now = state.now
         next_sid = world.next_stop(bus.route, bus.route_index)
 
         if next_sid is None:
@@ -376,7 +494,7 @@ class Scheduler:
         bus.set_status(now, Driving(from_stop=stop_id, to_stop=next_sid, remaining_km=distance))
         bus.route_index += 1
         bus.km_remaining -= distance
-        self.state.events.push(now + travel_duration, BusArrived(next_sid, bus.bus_id))
+        state.events.push(now + travel_duration, BusArrived(next_sid, bus.bus_id))
 
     def results(self) -> dict[str, Bus]:
         return self.state.world.buses
